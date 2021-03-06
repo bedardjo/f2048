@@ -15,23 +15,34 @@ void main() {
   ));
 }
 
+enum SwipeDirection { up, down, left, right }
+
+class GameState {
+  // this is the grid before the swipe has taken place
+  final List<List<Tile>> _previousGrid;
+  final SwipeDirection swipe;
+
+  GameState(List<List<Tile>> previousGrid, this.swipe) : _previousGrid = previousGrid;
+
+  // always make a copy so mutations don't screw things up.
+  List<List<Tile>> get previousGrid => _previousGrid.map((row) => row.map((tile) => tile.copy()).toList()).toList();
+}
+
 class TwentyFortyEight extends StatefulWidget {
   @override
   TwentyFortyEightState createState() => TwentyFortyEightState();
 }
 
-class TwentyFortyEightState extends State<TwentyFortyEight>
-    with SingleTickerProviderStateMixin {
+class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerProviderStateMixin {
   AnimationController controller;
 
-  List<List<Tile>> grid =
-      List.generate(4, (y) => List.generate(4, (x) => Tile(x, y, 0)));
+  List<List<Tile>> grid = List.generate(4, (y) => List.generate(4, (x) => Tile(x, y, 0)));
+  List<GameState> gameStates = [];
   List<Tile> toAdd = [];
 
   Iterable<Tile> get gridTiles => grid.expand((e) => e);
   Iterable<Tile> get allTiles => [gridTiles, toAdd].expand((e) => e);
-  List<List<Tile>> get gridCols =>
-      List.generate(4, (x) => List.generate(4, (y) => grid[y][x]));
+  List<List<Tile>> get gridCols => List.generate(4, (x) => List.generate(4, (y) => grid[y][x]));
 
   Timer aiTimer;
 
@@ -39,8 +50,7 @@ class TwentyFortyEightState extends State<TwentyFortyEight>
   void initState() {
     super.initState();
 
-    controller =
-        AnimationController(duration: Duration(milliseconds: 200), vsync: this);
+    controller = AnimationController(duration: Duration(milliseconds: 200), vsync: this);
     controller.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
         setState(() {
@@ -83,31 +93,74 @@ class TwentyFortyEightState extends State<TwentyFortyEight>
         backgroundColor: tan,
         body: Padding(
             padding: EdgeInsets.all(contentPadding),
-            child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  Swiper(
-                      up: () => merge(mergeUp),
-                      down: () => merge(mergeDown),
-                      left: () => merge(mergeLeft),
-                      right: () => merge(mergeRight),
-                      child: Container(
-                          height: gridSize,
-                          width: gridSize,
-                          padding: EdgeInsets.all(borderSize),
-                          decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(cornerRadius),
-                              color: darkBrown),
-                          child: Stack(
-                            children: stackItems,
-                          ))),
-                  RestartButton(onPressed: setupNewGame)
-                ])));
+            child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              Swiper(
+                  up: () => merge(SwipeDirection.up),
+                  down: () => merge(SwipeDirection.down),
+                  left: () => merge(SwipeDirection.left),
+                  right: () => merge(SwipeDirection.right),
+                  child: Container(
+                      height: gridSize,
+                      width: gridSize,
+                      padding: EdgeInsets.all(borderSize),
+                      decoration: BoxDecoration(borderRadius: BorderRadius.circular(cornerRadius), color: darkBrown),
+                      child: Stack(
+                        children: stackItems,
+                      ))),
+              BigButton(label: "Undo", color: numColor, onPressed: gameStates.isEmpty ? null : undoMove),
+              BigButton(label: "Restart", color: orange, onPressed: setupNewGame),
+            ])));
   }
 
-  void merge(bool Function() mergeFn) {
+  void undoMove() {
+    GameState previousState = gameStates.removeLast();
+    bool Function() mergeFn;
+    switch (previousState.swipe) {
+      case SwipeDirection.up:
+        mergeFn = mergeUp;
+        break;
+      case SwipeDirection.down:
+        mergeFn = mergeDown;
+        break;
+      case SwipeDirection.left:
+        mergeFn = mergeLeft;
+        break;
+      case SwipeDirection.right:
+        mergeFn = mergeRight;
+        break;
+    }
+    setState(() {
+      this.grid = previousState.previousGrid;
+      mergeFn();
+      controller.reverse(from: .99).then((_) {
+        setState(() {
+          this.grid = previousState.previousGrid;
+          gridTiles.forEach((t) => t.resetAnimations());
+        });
+      });
+    });
+  }
+
+  void merge(SwipeDirection direction) {
+    bool Function() mergeFn;
+    switch (direction) {
+      case SwipeDirection.up:
+        mergeFn = mergeUp;
+        break;
+      case SwipeDirection.down:
+        mergeFn = mergeDown;
+        break;
+      case SwipeDirection.left:
+        mergeFn = mergeLeft;
+        break;
+      case SwipeDirection.right:
+        mergeFn = mergeRight;
+        break;
+    }
+    List<List<Tile>> gridBeforeSwipe = grid.map((row) => row.map((tile) => tile.copy()).toList()).toList();
     setState(() {
       if (mergeFn()) {
+        gameStates.add(GameState(gridBeforeSwipe, direction));
         addNewTiles([2]);
         controller.forward(from: 0);
       }
@@ -116,24 +169,18 @@ class TwentyFortyEightState extends State<TwentyFortyEight>
 
   bool mergeLeft() => grid.map((e) => mergeTiles(e)).toList().any((e) => e);
 
-  bool mergeRight() =>
-      grid.map((e) => mergeTiles(e.reversed.toList())).toList().any((e) => e);
+  bool mergeRight() => grid.map((e) => mergeTiles(e.reversed.toList())).toList().any((e) => e);
 
   bool mergeUp() => gridCols.map((e) => mergeTiles(e)).toList().any((e) => e);
 
-  bool mergeDown() => gridCols
-      .map((e) => mergeTiles(e.reversed.toList()))
-      .toList()
-      .any((e) => e);
+  bool mergeDown() => gridCols.map((e) => mergeTiles(e.reversed.toList())).toList().any((e) => e);
 
   bool mergeTiles(List<Tile> tiles) {
     bool didChange = false;
     for (int i = 0; i < tiles.length; i++) {
       for (int j = i; j < tiles.length; j++) {
         if (tiles[j].value != 0) {
-          Tile mergeTile = tiles
-              .skip(j + 1)
-              .firstWhere((t) => t.value != 0, orElse: () => null);
+          Tile mergeTile = tiles.skip(j + 1).firstWhere((t) => t.value != 0, orElse: () => null);
           if (mergeTile != null && mergeTile.value != tiles[j].value) {
             mergeTile = null;
           }
@@ -169,6 +216,7 @@ class TwentyFortyEightState extends State<TwentyFortyEight>
 
   void setupNewGame() {
     setState(() {
+      gameStates.clear();
       gridTiles.forEach((t) {
         t.value = 0;
         t.resetAnimations();
